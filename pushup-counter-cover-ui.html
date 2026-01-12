@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Pushup Counter (Cover Camera)</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --accent: #00ff99;
+      --card: rgba(20,20,20,0.65);
+      --border: rgba(255,255,255,0.15);
+    }
+    body {
+      margin:0;
+      font-family:-apple-system,system-ui,Segoe UI,Roboto,Arial,sans-serif;
+      background:#000;
+      color:#fff;
+      overflow:hidden;
+    }
+    .wrap { position:relative; width:100vw; height:100vh; overflow:hidden; }
+
+    /* Keep camera running but you don't have to show it */
+    video {
+      position:absolute; inset:0;
+      width:100%; height:100%;
+      object-fit:cover;
+      opacity:0.12; /* set to 0 for fully hidden */
+      transform: scaleX(-1); /* selfie mirror for front cam */
+    }
+    .panel {
+      position:absolute;
+      inset: 12px;
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+      pointer-events:none;
+    }
+
+    .topHalf {
+      flex: 1 1 50%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      pointer-events:none;
+    }
+
+    .countBox {
+      pointer-events:auto;
+      width:100%;
+      height:100%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      background: var(--card);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius:18px;
+    }
+
+    .count {
+      font-weight: 900;
+      font-size: min(32vh, 220px);
+      line-height: 0.95;
+      letter-spacing: -0.02em;
+      color: #fff;
+      text-shadow: 0 6px 22px rgba(0,0,0,0.55);
+    }
+
+    .bottomHalf {
+      flex: 1 1 50%;
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+      pointer-events:auto;
+    }
+
+    .row {
+      display:flex;
+      gap:12px;
+      align-items:stretch;
+      flex-wrap:wrap;
+    }
+
+    .card {
+      flex: 1 1 240px;
+      background: var(--card);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius:18px;
+      padding:14px 16px;
+    }
+
+    .label { opacity:.85; font-weight:750; }
+    .status { margin-top:8px; opacity:.95; font-weight:700; }
+    .mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+    button {
+      border: 1px solid rgba(255,255,255,0.20);
+      background: rgba(255,255,255,0.10);
+      color:#fff;
+      border-radius:14px;
+      padding:12px 14px;
+      font-weight:800;
+      font-size:16px;
+    }
+
+    button.primary {
+      background: color-mix(in srgb, var(--accent) 22%, rgba(255,255,255,0.06));
+      border-color: color-mix(in srgb, var(--accent) 55%, rgba(255,255,255,0.10));
+    }
+
+    .small { font-size:12px; opacity:.8; line-height:1.35; }
+
+    .barWrap {
+      margin-top:10px;
+      width:100%;
+      height:14px;
+      border-radius:999px;
+      background: rgba(255,255,255,0.16);
+      overflow:hidden;
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    .bar {
+      height:100%;
+      width:0%;
+      background: var(--accent);
+      border-radius:999px;
+    }
+
+    input[type="range"] { width:100%; margin-top:8px; }
+    input[type="color"] {
+      width: 56px;
+      height: 40px;
+      padding: 0;
+      border: 1px solid rgba(255,255,255,0.20);
+      border-radius: 12px;
+      background: transparent;
+    }
+    .pill {
+      display:inline-flex;
+      gap:8px;
+      align-items:center;
+      padding:8px 10px;
+      border-radius:999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.06);
+      margin-top:10px;
+      font-weight:800;
+    }
+    .dot {
+      width:12px; height:12px; border-radius:50%;
+      background: rgba(255,255,255,0.25);
+      border: 1px solid rgba(255,255,255,0.25);
+    }
+
+    .footerNote {
+      margin-top:10px;
+      opacity:.85;
+      font-size:12px;
+      line-height:1.35;
+    }
+
+    @media (max-height: 720px) {
+      .count { font-size: min(28vh, 180px); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <video id="video" playsinline muted></video>
+
+    <div class="panel">
+      <div class="topHalf">
+        <div class="countBox">
+          <div id="count" class="count">0</div>
+        </div>
+      </div>
+
+      <div class="bottomHalf">
+        <div class="row">
+          <div class="card" style="flex: 1 1 320px;">
+            <div class="label">Brightness feedback</div>
+            <div style="margin-top:8px; display:flex; justify-content:space-between; gap:12px; align-items:baseline;">
+              <div>
+                <div style="font-size:34px; font-weight:900;" class="mono" id="bVal">—</div>
+                <div class="small">0.00 (dark) → 1.00 (bright)</div>
+              </div>
+              <div class="pill">
+                <span class="dot" id="phaseDot"></span>
+                <span id="phaseText">not running</span>
+              </div>
+            </div>
+            <div class="barWrap" aria-label="Brightness bar">
+              <div class="bar" id="bBar"></div>
+            </div>
+
+            <div style="margin-top:12px;" class="small">
+              Cover threshold: <span class="mono" id="thrVal">0.18</span>
+              <input id="thr" type="range" min="0.02" max="0.60" step="0.01" value="0.18" />
+            </div>
+
+            <div style="margin-top:10px;" class="small">
+              Debounce (ms): <span class="mono" id="dbVal">450</span>
+              <input id="db" type="range" min="150" max="1500" step="10" value="450" />
+            </div>
+          </div>
+
+          <div class="card" style="flex: 1 1 260px;">
+            <div class="label">Controls</div>
+            <div class="row" style="margin-top:10px;">
+              <button class="primary" id="startBtn">Start</button>
+              <button id="resetBtn">Reset</button>
+              <button id="flipBtn">Flip</button>
+            </div>
+
+            <div style="margin-top:14px;" class="label">Choose color</div>
+            <div style="margin-top:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+              <input id="colorPicker" type="color" value="#00ff99" />
+              <div class="small">This sets the brightness bar + “covered” indicator.</div>
+            </div>
+
+            <div class="status" id="status">Tap Start to begin</div>
+
+            <div class="footerNote">
+              Tip: place the phone so at the <b>down</b> position your shirt/hand briefly <b>covers the camera</b>.
+              Works best on <b>HTTPS</b> (GitHub Pages).
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const video = document.getElementById('video');
+
+  const countEl = document.getElementById('count');
+  const statusEl = document.getElementById('status');
+
+  const bValEl = document.getElementById('bVal');
+  const bBarEl = document.getElementById('bBar');
+
+  const phaseDot = document.getElementById('phaseDot');
+  const phaseText = document.getElementById('phaseText');
+
+  const startBtn = document.getElementById('startBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const flipBtn = document.getElementById('flipBtn');
+
+  const thr = document.getElementById('thr');
+  const thrVal = document.getElementById('thrVal');
+  const db = document.getElementById('db');
+  const dbVal = document.getElementById('dbVal');
+
+  const colorPicker = document.getElementById('colorPicker');
+
+  let stream = null;
+  let running = false;
+  let facingMode = 'user'; // front camera default
+
+  // Counting state: bright -> covered -> bright = 1 rep
+  let reps = 0;
+  let phase = 'bright';      // 'bright' | 'covered'
+  let lastCountAt = 0;
+
+  let COVER_THRESHOLD = parseFloat(thr.value);
+  let DEBOUNCE_MS = parseInt(db.value, 10);
+
+  function setAccent(hex) {
+    document.documentElement.style.setProperty('--accent', hex);
+  }
+  setAccent(colorPicker.value);
+  colorPicker.addEventListener('input', () => setAccent(colorPicker.value));
+
+  thrVal.textContent = COVER_THRESHOLD.toFixed(2);
+  dbVal.textContent = String(DEBOUNCE_MS);
+
+  thr.addEventListener('input', () => {
+    COVER_THRESHOLD = parseFloat(thr.value);
+    thrVal.textContent = COVER_THRESHOLD.toFixed(2);
+  });
+
+  db.addEventListener('input', () => {
+    DEBOUNCE_MS = parseInt(db.value, 10);
+    dbVal.textContent = String(DEBOUNCE_MS);
+  });
+
+  function setPhaseUI(p) {
+    if (!running) {
+      phaseDot.style.background = 'rgba(255,255,255,0.25)';
+      phaseText.textContent = 'not running';
+      return;
+    }
+    if (p === 'covered') {
+      phaseDot.style.background = 'var(--accent)';
+      phaseText.textContent = 'covered';
+    } else {
+      phaseDot.style.background = 'rgba(255,255,255,0.25)';
+      phaseText.textContent = 'bright';
+    }
+  }
+
+  function reset() {
+    reps = 0;
+    phase = 'bright';
+    lastCountAt = 0;
+    countEl.textContent = '0';
+    statusEl.textContent = 'Reset';
+    setPhaseUI(phase);
+    bValEl.textContent = '—';
+    bBarEl.style.width = '0%';
+  }
+  resetBtn.addEventListener('click', reset);
+
+  async function stopStream() {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+  }
+
+  async function startCamera() {
+    await stopStream();
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode,
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    });
+    video.srcObject = stream;
+    await video.play();
+  }
+
+  // Brightness from small downscaled frame
+  const tmp = document.createElement('canvas');
+  const tctx = tmp.getContext('2d', { willReadFrequently: true });
+
+  function computeBrightness() {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return null;
+
+    const w = 64;
+    const h = Math.max(1, Math.round(vh * (w / vw)));
+    if (tmp.width !== w || tmp.height !== h) {
+      tmp.width = w;
+      tmp.height = h;
+    }
+
+    tctx.drawImage(video, 0, 0, w, h);
+    const img = tctx.getImageData(0, 0, w, h).data;
+
+    let sum = 0;
+    const n = w * h;
+    for (let i = 0; i < img.length; i += 4) {
+      const r = img[i], g = img[i+1], b = img[i+2];
+      sum += (0.2126*r + 0.7152*g + 0.0722*b) / 255;
+    }
+    return sum / n;
+  }
+
+  function tick() {
+    if (!running) return;
+
+    const b = computeBrightness();
+    if (b == null) {
+      statusEl.textContent = 'Waiting for video…';
+      requestAnimationFrame(tick);
+      return;
+    }
+
+    bValEl.textContent = b.toFixed(2);
+    bBarEl.style.width = `${Math.max(0, Math.min(1, b)) * 100}%`;
+
+    const now = Date.now();
+
+    if (phase === 'bright') {
+      setPhaseUI('bright');
+      statusEl.textContent = 'Ready (bright)';
+      if (b < COVER_THRESHOLD) {
+        phase = 'covered';
+        setPhaseUI('covered');
+        statusEl.textContent = 'Down detected (covered)';
+      }
+    } else {
+      setPhaseUI('covered');
+      statusEl.textContent = 'Covered…';
+      if (b >= COVER_THRESHOLD) {
+        if (now - lastCountAt > DEBOUNCE_MS) {
+          reps += 1;
+          lastCountAt = now;
+          countEl.textContent = String(reps);
+          statusEl.textContent = `Counted! ${reps}`;
+        }
+        phase = 'bright';
+        setPhaseUI('bright');
+      }
+    }
+
+    requestAnimationFrame(tick);
+  }
+
+  startBtn.addEventListener('click', async () => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        statusEl.textContent = 'Camera not supported in this browser.';
+        return;
+      }
+      if (!stream) await startCamera();
+
+      running = true;
+      statusEl.textContent = 'Counting…';
+      setPhaseUI(phase);
+      tick();
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = 'Camera failed (need HTTPS + permission).';
+      running = false;
+      setPhaseUI(phase);
+    }
+  });
+
+  flipBtn.addEventListener('click', async () => {
+    try {
+      facingMode = (facingMode === 'user') ? 'environment' : 'user';
+      statusEl.textContent = 'Switching camera…';
+      await startCamera();
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = 'Could not switch camera.';
+    }
+  });
+
+  reset();
+})();
+</script>
+</body>
+</html>
