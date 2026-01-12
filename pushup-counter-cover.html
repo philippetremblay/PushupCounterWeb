@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Pushup Counter (Cover Camera)</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin:0; font-family:-apple-system,system-ui,Segoe UI,Roboto,Arial,sans-serif; background:#000; color:#fff; }
+    .wrap { position:relative; width:100vw; height:100vh; overflow:hidden; }
+    video, canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+    .hud {
+      position:absolute; left:12px; right:12px; top:12px;
+      display:flex; gap:12px; align-items:flex-start; justify-content:space-between;
+    }
+    .card {
+      background: rgba(20,20,20,0.65);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius:14px;
+      padding:12px 14px;
+      min-width: 150px;
+    }
+    .big { font-size:52px; font-weight:850; line-height:1; margin-top:6px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
+    button {
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.08);
+      color:#fff; border-radius:12px;
+      padding:10px 12px; font-weight:700;
+    }
+    input[type="range"] { width: 100%; }
+    .hint {
+      position:absolute; left:12px; right:12px; bottom:16px;
+      background: rgba(20,20,20,0.65);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius:14px;
+      padding:12px 14px;
+      font-size:13px;
+      line-height:1.35;
+    }
+    .warn { color:#ffd27a; }
+    .ok { color:#b5ffb5; }
+    .mono { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <video id="video" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+
+    <div class="hud">
+      <div class="card">
+        <div style="opacity:.85;font-weight:750;">Pushups</div>
+        <div id="count" class="big">0</div>
+        <div id="status" style="opacity:.9;margin-top:6px;">Tap Start</div>
+      </div>
+
+      <div class="card" style="min-width:240px;">
+        <div style="opacity:.85;font-weight:750;">Controls</div>
+        <div class="row">
+          <button id="startBtn">Start</button>
+          <button id="resetBtn">Reset</button>
+          <button id="flipBtn">Flip</button>
+        </div>
+
+        <div style="margin-top:10px; opacity:.85; font-size:12px;">
+          Cover threshold (darker = lower): <span id="thrVal" class="mono">0.18</span>
+        </div>
+        <input id="thr" type="range" min="0.02" max="0.50" step="0.01" value="0.18" />
+
+        <div style="margin-top:10px; opacity:.85; font-size:12px;">
+          Debounce (ms): <span id="dbVal" class="mono">450</span>
+        </div>
+        <input id="db" type="range" min="150" max="1200" step="10" value="450" />
+      </div>
+    </div>
+
+    <div class="hint">
+      <div><b>How this version counts:</b> it adds <b>1 rep</b> each time the image gets <b>very dark</b> (camera covered) and then becomes <b>bright again</b>.</div>
+      <div style="margin-top:6px;"><b>Tip:</b> Put the phone under your chest/face area so that at the <b>down</b> position you briefly <b>cover the camera</b> (shirt/hand/face).</div>
+      <div style="margin-top:6px;" class="warn"><b>iPhone note:</b> camera works only on <b>HTTPS</b> (GitHub Pages is fine).</div>
+      <div style="margin-top:6px; opacity:.85;">Live brightness: <span id="bVal" class="mono">—</span></div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const octx = overlay.getContext('2d', { willReadFrequently: true });
+
+  const countEl = document.getElementById('count');
+  const statusEl = document.getElementById('status');
+  const bValEl = document.getElementById('bVal');
+
+  const startBtn = document.getElementById('startBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const flipBtn = document.getElementById('flipBtn');
+
+  const thr = document.getElementById('thr');
+  const thrVal = document.getElementById('thrVal');
+  const db = document.getElementById('db');
+  const dbVal = document.getElementById('dbVal');
+
+  let stream = null;
+  let running = false;
+  let facingMode = 'user'; // front camera by default
+
+  // Counting state: bright -> covered -> bright = 1 rep
+  let reps = 0;
+  let phase = 'bright';      // 'bright' | 'covered'
+  let lastCountAt = 0;
+
+  // We compute normalized brightness (0..1). Covered camera => near 0.
+  let COVER_THRESHOLD = parseFloat(thr.value); // default 0.18
+  let DEBOUNCE_MS = parseInt(db.value, 10);    // default 450
+
+  thrVal.textContent = COVER_THRESHOLD.toFixed(2);
+  dbVal.textContent = String(DEBOUNCE_MS);
+
+  thr.addEventListener('input', () => {
+    COVER_THRESHOLD = parseFloat(thr.value);
+    thrVal.textContent = COVER_THRESHOLD.toFixed(2);
+  });
+
+  db.addEventListener('input', () => {
+    DEBOUNCE_MS = parseInt(db.value, 10);
+    dbVal.textContent = String(DEBOUNCE_MS);
+  });
+
+  function reset() {
+    reps = 0;
+    phase = 'bright';
+    lastCountAt = 0;
+    countEl.textContent = '0';
+    statusEl.textContent = 'Reset';
+  }
+
+  resetBtn.addEventListener('click', reset);
+
+  async function stopStream() {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+  }
+
+  async function startCamera() {
+    await stopStream();
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode,
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    });
+
+    video.srcObject = stream;
+    await video.play();
+  }
+
+  function drawHUD(brightness) {
+    // Match overlay to video pixels
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return;
+
+    if (overlay.width !== vw || overlay.height !== vh) {
+      overlay.width = vw;
+      overlay.height = vh;
+    }
+
+    // Minimal overlay: a small bar + text
+    octx.clearRect(0, 0, vw, vh);
+
+    // Brightness bar background
+    octx.fillStyle = 'rgba(0,0,0,0.45)';
+    octx.fillRect(12, vh - 70, 260, 50);
+
+    // Bar
+    const barW = 220;
+    const barH = 10;
+    const x = 24;
+    const y = vh - 38;
+
+    octx.fillStyle = 'rgba(255,255,255,0.25)';
+    octx.fillRect(x, y, barW, barH);
+
+    octx.fillStyle = 'rgba(255,255,255,0.85)';
+    octx.fillRect(x, y, Math.max(0, Math.min(barW, barW * brightness)), barH);
+
+    octx.font = '16px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    octx.fillStyle = '#fff';
+    octx.fillText(`Brightness: ${brightness.toFixed(2)}  Thr: ${COVER_THRESHOLD.toFixed(2)}`, 24, vh - 46);
+
+    // Phase indicator
+    octx.font = '18px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    octx.fillStyle = (phase === 'covered') ? '#ffd27a' : '#b5ffb5';
+    octx.fillText(phase === 'covered' ? 'COVERED' : 'BRIGHT', 24, vh - 20);
+  }
+
+  // Compute average brightness from a small downscaled frame for speed
+  const tmp = document.createElement('canvas');
+  const tctx = tmp.getContext('2d', { willReadFrequently: true });
+
+  function computeBrightness() {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return null;
+
+    // Downscale to 64px wide to reduce CPU
+    const w = 64;
+    const h = Math.max(1, Math.round(vh * (w / vw)));
+    if (tmp.width !== w || tmp.height !== h) {
+      tmp.width = w;
+      tmp.height = h;
+    }
+
+    tctx.drawImage(video, 0, 0, w, h);
+    const img = tctx.getImageData(0, 0, w, h).data;
+
+    // Luma approx: 0.2126R + 0.7152G + 0.0722B
+    let sum = 0;
+    const n = w * h;
+    for (let i = 0; i < img.length; i += 4) {
+      const r = img[i], g = img[i+1], b = img[i+2];
+      sum += (0.2126*r + 0.7152*g + 0.0722*b) / 255;
+    }
+    return sum / n; // 0..1
+  }
+
+  function tick() {
+    if (!running) return;
+
+    const b = computeBrightness();
+    if (b == null) {
+      statusEl.textContent = 'Waiting for video…';
+      requestAnimationFrame(tick);
+      return;
+    }
+
+    bValEl.textContent = b.toFixed(2);
+    drawHUD(b);
+
+    const now = Date.now();
+
+    // State machine:
+    // bright -> (b < threshold) => covered
+    // covered -> (b >= threshold) => bright AND count (debounced)
+    if (phase === 'bright') {
+      statusEl.textContent = 'Ready (bright)';
+      if (b < COVER_THRESHOLD) {
+        phase = 'covered';
+        statusEl.textContent = 'Down detected (covered)';
+      }
+    } else { // covered
+      statusEl.textContent = 'Covered…';
+      if (b >= COVER_THRESHOLD) {
+        // Count only when transitioning back to bright
+        if (now - lastCountAt > DEBOUNCE_MS) {
+          reps += 1;
+          lastCountAt = now;
+          countEl.textContent = String(reps);
+          statusEl.textContent = `Counted! ${reps}`;
+        }
+        phase = 'bright';
+      }
+    }
+
+    requestAnimationFrame(tick);
+  }
+
+  startBtn.addEventListener('click', async () => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        statusEl.textContent = 'Camera not supported in this browser.';
+        return;
+      }
+
+      if (!stream) await startCamera();
+
+      running = true;
+      statusEl.textContent = 'Counting…';
+
+      tick();
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = 'Camera failed (need HTTPS + permission).';
+    }
+  });
+
+  flipBtn.addEventListener('click', async () => {
+    try {
+      facingMode = (facingMode === 'user') ? 'environment' : 'user';
+      statusEl.textContent = 'Switching camera…';
+      await startCamera();
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = 'Could not switch camera.';
+    }
+  });
+
+  // Initial
+  reset();
+})();
+</script>
+</body>
+</html>
