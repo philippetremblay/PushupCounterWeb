@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Pushup Counter (Cover Camera)</title>
+  <style>
+    :root{
+      color-scheme: dark;
+      --accent:#00ff99;
+      --bgBright:#050607;
+      --bgCovered:#0b2a22;
+      --card: rgba(20,20,20,0.65);
+      --border: rgba(255,255,255,0.15);
+    }
+
+    /* ✅ Allow scrolling when controls don't fit */
+    html, body { height: 100%; }
+    body{
+      margin:0;
+      font-family:-apple-system,system-ui,Segoe UI,Roboto,Arial,sans-serif;
+      background: var(--bgBright);
+      color:#fff;
+      overflow:auto; /* was hidden */
+      -webkit-overflow-scrolling: touch;
+      transition: background 180ms linear;
+    }
+
+    /* Use dynamic viewport units where supported (iOS) */
+    .wrap{
+      position:relative;
+      min-height: 100dvh;
+      min-height: 100vh;
+      padding: 12px;
+      padding-bottom: calc(12px + env(safe-area-inset-bottom));
+      box-sizing: border-box;
+    }
+
+    /* Keep camera + confetti pinned to screen */
+    video{
+      position:fixed; inset:0;
+      width:100%; height:100%;
+      object-fit:cover;
+      opacity:0.10; /* set to 0 to hide completely */
+      transform: scaleX(-1);
+      filter: saturate(1.1) contrast(1.05);
+      z-index: 0;
+    }
+    #confetti{
+      position:fixed; inset:0;
+      width:100%; height:100%;
+      pointer-events:none;
+      z-index: 9999; /* bring confetti to foreground */
+    }
+
+    /* Content sits above video */
+    .panel{
+      position:relative;
+      z-index: 2;
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+    }
+
+    /* ✅ Make the counter large but not force a 50/50 split */
+    .countBox{
+      width:100%;
+      height: clamp(240px, 42vh, 420px); /* big header area */
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      background: var(--card);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius:18px;
+    }
+    .count{
+      font-weight:900;
+      font-size: min(30vh, 220px);
+      line-height:0.95;
+      letter-spacing:-0.02em;
+      color:#fff;
+      text-shadow: 0 6px 22px rgba(0,0,0,0.55);
+    }
+
+    .row{
+      display:flex;
+      gap:12px;
+      align-items:stretch;
+      flex-wrap:wrap;
+    }
+
+    .card{
+      flex: 1 1 280px;
+      background: var(--card);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius:18px;
+      padding:14px 16px;
+      box-sizing:border-box;
+    }
+
+    .label{ opacity:.85; font-weight:800; }
+    .status{ margin-top:8px; opacity:.95; font-weight:800; }
+    .mono{ font-variant-numeric: tabular-nums; font-feature-settings:"tnum" 1; }
+    .small{ font-size:12px; opacity:.82; line-height:1.35; }
+
+    button{
+      border:1px solid rgba(255,255,255,0.20);
+      background: rgba(255,255,255,0.10);
+      color:#fff;
+      border-radius:14px;
+      padding:12px 14px;
+      font-weight:900;
+      font-size:16px;
+    }
+    button.primary{
+      background: color-mix(in srgb, var(--accent) 22%, rgba(255,255,255,0.06));
+      border-color: color-mix(in srgb, var(--accent) 55%, rgba(255,255,255,0.10));
+    }
+
+    .barWrap{
+      margin-top:10px;
+      width:100%;
+      height:14px;
+      border-radius:999px;
+      background: rgba(255,255,255,0.16);
+      overflow:hidden;
+      border:1px solid rgba(255,255,255,0.12);
+    }
+    .bar{
+      height:100%;
+      width:0%;
+      background: var(--accent);
+      border-radius:999px;
+    }
+
+    input[type="range"]{ width:100%; margin-top:8px; }
+    input[type="color"]{
+      width:56px; height:40px;
+      padding:0;
+      border:1px solid rgba(255,255,255,0.20);
+      border-radius:12px;
+      background:transparent;
+    }
+    input[type="number"]{
+      width: 96px;
+      padding:10px 10px;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.08);
+      color:#fff;
+      font-weight:900;
+      font-size:16px;
+      outline:none;
+    }
+    input[type="checkbox"]{ transform: scale(1.2); }
+
+    .pill{
+      display:inline-flex;
+      gap:8px;
+      align-items:center;
+      padding:8px 10px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.06);
+      margin-top:10px;
+      font-weight:900;
+    }
+    .dot{
+      width:12px; height:12px; border-radius:50%;
+      background: rgba(255,255,255,0.25);
+      border:1px solid rgba(255,255,255,0.25);
+    }
+  
+    /* --- UX TUNING --- */
+    .controlsCard { order: -1; } /* move controls up on mobile */
+
+    @media (min-width: 768px){
+      .controlsCard { order: 0; } /* normal order on larger screens */
+    }
+
+</style>
+</head>
+<body>
+  <video id="video" playsinline muted></video>
+  <canvas id="confetti"></canvas>
+
+  <div class="wrap">
+    <div class="panel">
+      <div class="countBox">
+        <div id="count" class="count">0</div>
+      </div>
+
+      <div class="row">
+        <div class="card" style="flex:1 1 330px;">
+          <div class="label">Brightness feedback</div>
+          <div style="margin-top:8px; display:flex; justify-content:space-between; gap:12px; align-items:baseline;">
+            <div>
+              <div style="font-size:34px; font-weight:900;" class="mono" id="bVal">—</div>
+              <div class="small">0.00 (dark) → 1.00 (bright)</div>
+            </div>
+            <div class="pill">
+              <span class="dot" id="phaseDot"></span>
+              <span id="phaseText">not running</span>
+            </div>
+          </div>
+
+          <div class="barWrap" aria-label="Brightness bar">
+            <div class="bar" id="bBar"></div>
+          </div>
+
+          <div style="margin-top:12px;" class="small">
+            Cover threshold: <span class="mono" id="thrVal">0.18</span>
+            <input id="thr" type="range" min="0.02" max="0.60" step="0.01" value="0.18" />
+          </div>
+
+          <div style="margin-top:10px;" class="small">
+            Debounce (ms): <span class="mono" id="dbVal">450</span>
+            <input id="db" type="range" min="150" max="1500" step="10" value="450" />
+          </div>
+        </div>
+
+        <div class="card controlsCard" style="flex:1 1 280px;">
+          <div class="label">Controls</div>
+          <div class="row" style="margin-top:10px;">
+            <button class="primary" id="startBtn">Start</button>
+            <button id="resetBtn">Reset</button>
+            <button id="flipBtn">Flip</button>
+          </div>
+
+          <div style="margin-top:14px;" class="label">Background changes</div>
+          <div class="small" style="margin-top:6px;">Pick background colors for <b>bright</b> vs <b>covered</b>.</div>
+          <div style="margin-top:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+            <div>
+              <div class="small">Accent</div>
+              <input id="accentPicker" type="color" value="#00ff99" />
+            </div>
+            <div>
+              <div class="small">Bright BG</div>
+              <input id="bgBrightPicker" type="color" value="#050607" />
+            </div>
+            <div>
+              <div class="small">Covered BG</div>
+              <input id="bgCoveredPicker" type="color" value="#0b2a22" />
+            </div>
+          </div>
+
+          <div style="margin-top:14px;" class="label">Celebrate</div>
+          <div class="small" style="margin-top:6px;">Show confetti every N reps.</div>
+          <div style="margin-top:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+            <label class="small" style="display:flex; gap:10px; align-items:center;">
+              <input id="confettiOn" type="checkbox" checked />
+              Confetti enabled
+            </label>
+            <div class="small">Every</div>
+            <input id="celebrateEvery" type="number" min="1" max="999" step="1" value="10" />
+            <div class="small">reps</div>
+            <button id="testConfettiBtn">Test</button>
+          </div>
+
+          <div class="status" id="status">Tap Start to begin</div>
+          <div class="small" style="margin-top:10px;">
+            Tip: at the <b>down</b> position, briefly <b>cover the camera</b> (shirt/hand/face).
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const video = document.getElementById('video');
+  const confettiCanvas = document.getElementById('confetti');
+  const cctx = confettiCanvas.getContext('2d');
+
+  const countEl = document.getElementById('count');
+  const statusEl = document.getElementById('status');
+
+  const bValEl = document.getElementById('bVal');
+  const bBarEl = document.getElementById('bBar');
+  const phaseDot = document.getElementById('phaseDot');
+  const phaseText = document.getElementById('phaseText');
+
+  const startBtn = document.getElementById('startBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const flipBtn = document.getElementById('flipBtn');
+
+  const thr = document.getElementById('thr');
+  const thrVal = document.getElementById('thrVal');
+  const db = document.getElementById('db');
+  const dbVal = document.getElementById('dbVal');
+
+  const accentPicker = document.getElementById('accentPicker');
+  const bgBrightPicker = document.getElementById('bgBrightPicker');
+  const bgCoveredPicker = document.getElementById('bgCoveredPicker');
+
+  const confettiOn = document.getElementById('confettiOn');
+  const celebrateEvery = document.getElementById('celebrateEvery');
+  const testConfettiBtn = document.getElementById('testConfettiBtn');
+
+  let stream = null;
+  let running = false;
+  let facingMode = 'user';
+
+  let reps = 0;
+  let phase = 'bright';
+  let lastCountAt = 0;
+
+  let COVER_THRESHOLD = parseFloat(thr.value);
+  let DEBOUNCE_MS = parseInt(db.value, 10);
+
+  function setVar(name, value){ document.documentElement.style.setProperty(name, value); }
+  function applyColors(){
+    setVar('--accent', accentPicker.value);
+    setVar('--bgBright', bgBrightPicker.value);
+    setVar('--bgCovered', bgCoveredPicker.value);
+    document.body.style.background = (phase === 'covered') ? 'var(--bgCovered)' : 'var(--bgBright)';
+  }
+  [accentPicker, bgBrightPicker, bgCoveredPicker].forEach(el => el.addEventListener('input', applyColors));
+  applyColors();
+
+  thrVal.textContent = COVER_THRESHOLD.toFixed(2);
+  dbVal.textContent = String(DEBOUNCE_MS);
+  thr.addEventListener('input', () => {
+    COVER_THRESHOLD = parseFloat(thr.value);
+    thrVal.textContent = COVER_THRESHOLD.toFixed(2);
+  });
+  db.addEventListener('input', () => {
+    DEBOUNCE_MS = parseInt(db.value, 10);
+    dbVal.textContent = String(DEBOUNCE_MS);
+  });
+
+  function setPhaseUI(p){
+    if (!running){
+      phaseDot.style.background = 'rgba(255,255,255,0.25)';
+      phaseText.textContent = 'not running';
+      document.body.style.background = 'var(--bgBright)';
+      return;
+    }
+    if (p === 'covered'){
+      phaseDot.style.background = 'var(--accent)';
+      phaseText.textContent = 'covered';
+      document.body.style.background = 'var(--bgCovered)';
+    } else {
+      phaseDot.style.background = 'rgba(255,255,255,0.25)';
+      phaseText.textContent = 'bright';
+      document.body.style.background = 'var(--bgBright)';
+    }
+  }
+
+  // Confetti
+  let confettiParticles = [];
+  let confettiRunning = false;
+  let confettiEndAt = 0;
+
+  function resizeConfetti(){
+    const dpr = window.devicePixelRatio || 1;
+    confettiCanvas.width = Math.floor(window.innerWidth * dpr);
+    confettiCanvas.height = Math.floor(window.innerHeight * dpr);
+    cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resizeConfetti);
+  resizeConfetti();
+
+  function rand(min, max){ return Math.random() * (max - min) + min; }
+  function pickColor(){
+    const palette = [accentPicker.value, '#ff4d6d', '#ffd166', '#4cc9f0', '#b8f2e6', '#c77dff'];
+    return palette[Math.floor(Math.random() * palette.length)];
+  }
+
+  function launchConfetti(){
+    if (!confettiOn.checked) return;
+    resizeConfetti();
+    confettiParticles = [];
+    confettiRunning = true;
+    confettiEndAt = performance.now() + 1700;
+
+    const w = window.innerWidth, h = window.innerHeight;
+    const count = Math.min(220, Math.max(120, Math.floor(w / 3)));
+
+    for (let i = 0; i < count; i++){
+      confettiParticles.push({
+        x: rand(0, w),
+        y: rand(-h * 0.2, -10),
+        vx: rand(-1.2, 1.2),
+        vy: rand(3.2, 7.2),
+        rot: rand(0, Math.PI * 2),
+        vr: rand(-0.15, 0.15),
+        size: rand(6, 12),
+        color: pickColor(),
+        shape: Math.random() < 0.7 ? 'rect' : 'circle'
+      });
+    }
+    requestAnimationFrame(confettiTick);
+  }
+
+  function confettiTick(t){
+    if (!confettiRunning) return;
+
+    const w = window.innerWidth, h = window.innerHeight;
+    cctx.clearRect(0, 0, w, h);
+
+    const remaining = Math.max(0, confettiEndAt - t);
+    const alpha = Math.min(1, remaining / 700 + 0.15);
+    cctx.globalAlpha = alpha;
+
+    for (const p of confettiParticles){
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.03;
+      p.vx *= 0.995;
+      p.rot += p.vr;
+
+      cctx.fillStyle = p.color;
+      cctx.save();
+      cctx.translate(p.x, p.y);
+      cctx.rotate(p.rot);
+
+      if (p.shape === 'rect'){
+        cctx.fillRect(-p.size/2, -p.size/2, p.size, p.size * 0.6);
+      } else {
+        cctx.beginPath();
+        cctx.arc(0, 0, p.size * 0.35, 0, Math.PI * 2);
+        cctx.fill();
+      }
+      cctx.restore();
+
+      if (p.y > h + 40){
+        p.y = rand(-120, -20);
+        p.x = rand(0, w);
+        p.vy = rand(3.2, 7.2);
+      }
+    }
+
+    cctx.globalAlpha = 1;
+
+    if (t >= confettiEndAt){
+      confettiRunning = false;
+      cctx.clearRect(0, 0, w, h);
+      return;
+    }
+    requestAnimationFrame(confettiTick);
+  }
+
+  testConfettiBtn.addEventListener('click', launchConfetti);
+
+  function reset(){
+    reps = 0;
+    phase = 'bright';
+    lastCountAt = 0;
+    countEl.textContent = '0';
+    statusEl.textContent = 'Reset';
+    setPhaseUI(phase);
+    bValEl.textContent = '—';
+    bBarEl.style.width = '0%';
+    confettiRunning = false;
+    cctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  }
+  resetBtn.addEventListener('click', reset);
+
+  async function stopStream(){
+    if (stream){
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+  }
+  async function startCamera(){
+    await stopStream();
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio:false,
+      video:{
+        facingMode,
+        width:{ ideal:1280 },
+        height:{ ideal:720 }
+      }
+    });
+    video.srcObject = stream;
+    await video.play();
+  }
+
+  const tmp = document.createElement('canvas');
+  const tctx = tmp.getContext('2d', { willReadFrequently:true });
+
+  function computeBrightness(){
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return null;
+
+    const w = 64;
+    const h = Math.max(1, Math.round(vh * (w / vw)));
+    if (tmp.width !== w || tmp.height !== h){
+      tmp.width = w;
+      tmp.height = h;
+    }
+    tctx.drawImage(video, 0, 0, w, h);
+    const data = tctx.getImageData(0, 0, w, h).data;
+
+    let sum = 0;
+    const n = w * h;
+    for (let i = 0; i < data.length; i += 4){
+      const r = data[i], g = data[i+1], b = data[i+2];
+      sum += (0.2126*r + 0.7152*g + 0.0722*b) / 255;
+    }
+    return sum / n;
+  }
+
+  function maybeCelebrate(newReps){
+    const every = Math.max(1, Math.min(999, parseInt(celebrateEvery.value || '10', 10)));
+    celebrateEvery.value = String(every);
+    if (newReps > 0 && newReps % every === 0){
+      launchConfetti();
+      statusEl.textContent = `🎉 ${newReps}!`;
+    }
+  }
+
+  function tick(){
+    if (!running) return;
+
+    const b = computeBrightness();
+    if (b == null){
+      statusEl.textContent = 'Waiting for video…';
+      requestAnimationFrame(tick);
+      return;
+    }
+
+    bValEl.textContent = b.toFixed(2);
+    bBarEl.style.width = `${Math.max(0, Math.min(1, b)) * 100}%`;
+
+    const now = Date.now();
+
+    if (phase === 'bright'){
+      setPhaseUI('bright');
+      statusEl.textContent = 'Ready (bright)';
+      if (b < COVER_THRESHOLD){
+        phase = 'covered';
+        setPhaseUI('covered');
+        statusEl.textContent = 'Down detected (covered)';
+      }
+    } else {
+      setPhaseUI('covered');
+      statusEl.textContent = 'Covered…';
+      if (b >= COVER_THRESHOLD){
+        if (now - lastCountAt > DEBOUNCE_MS){
+          reps += 1;
+          lastCountAt = now;
+          countEl.textContent = String(reps);
+          statusEl.textContent = `Counted! ${reps}`;
+          maybeCelebrate(reps);
+        }
+        phase = 'bright';
+        setPhaseUI('bright');
+      }
+    }
+
+    requestAnimationFrame(tick);
+  }
+
+  startBtn.addEventListener('click', async () => {
+    try{
+      if (!navigator.mediaDevices?.getUserMedia){
+        statusEl.textContent = 'Camera not supported in this browser.';
+        return;
+      }
+      if (!stream) await startCamera();
+
+      running = true;
+      statusEl.textContent = 'Counting…';
+      setPhaseUI(phase);
+      applyColors();
+      tick();
+    } catch(e){
+      console.error(e);
+      statusEl.textContent = 'Camera failed (need HTTPS + permission).';
+      running = false;
+      setPhaseUI(phase);
+    }
+  });
+
+  flipBtn.addEventListener('click', async () => {
+    try{
+      facingMode = (facingMode === 'user') ? 'environment' : 'user';
+      statusEl.textContent = 'Switching camera…';
+      await startCamera();
+    } catch(e){
+      console.error(e);
+      statusEl.textContent = 'Could not switch camera.';
+    }
+  });
+
+  reset();
+})();
+</script>
+</body>
+</html>
